@@ -47,7 +47,7 @@ def window_already_found(window_number, windows=table_windows) -> bool:
 
 
 # Updates table_windows (recurs until found)
-def refresh_table_windows() -> None:
+def refresh_table_windows(forever=False) -> None:
     global table_windows
 
     # MacOS
@@ -59,6 +59,7 @@ def refresh_table_windows() -> None:
             Quartz.kCGNullWindowID)
         opened_windows_formatted = []
 
+        # Find all Ignition Casino windows
         for opened_window in opened_windows:
             if opened_window['kCGWindowOwnerName'] == 'Ignition Casino Poker':
                 window_name = opened_window.get('kCGWindowName', None)
@@ -101,19 +102,21 @@ def refresh_table_windows() -> None:
     elif config['Environment']['OS'] == 'Windows':
         pass
 
+    if forever:
+        time.sleep(float(config.get('DEFAULT', 'table_windows_recur_sleep_time')))
+        refresh_table_windows(forever)
+
 
 # TODO: improve grab_screens method. Make so we can get a screenshot of a particular table by hwnd
 def setup_tables() -> dict:
-    # refresh_table_windows()
+    # Initial table refresh (hangs until found)
+    refresh_table_windows()
 
     # Begin background refresh for table windows
-    while True:
-        table_thread = threading.Thread(target=refresh_table_windows)
-        table_thread.start()
-        # TODO: remove .join()? figure out what to do here
-        table_thread.join()
+    thread = threading.Thread(target=refresh_table_windows, args=(True,))
+    thread.start()
 
-    # log.debug(table_windows)
+    log.debug("Now we begin!")
 
     # for result in search_results:
     #     hwnd = result[0]
