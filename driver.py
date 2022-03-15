@@ -12,7 +12,7 @@ from classes.Player import Player
 # MacOS
 if config['Environment']['OS'] == 'Darwin':
     import Quartz
-    from ScriptingBridge import *
+    import applescript
 
 # Windows (to be implemented...)
 elif config['Environment']['OS'] == 'Windows':
@@ -73,42 +73,17 @@ def get_num_seats(img_gray) -> int:
 
 
 def resize_tables() -> None:
-    app = SBApplication.applicationWithBundleIdentifier_("Poker-Lobby")
-    if hasattr(app, 'windows'):
-        log.debug(app)
-        log.debug(app.windows())
-        finderWin = app.windows()[0]
-        finderWin.setBounds_([[100, 100], [100, 100]])
-        finderWin.setPosition_([20, 20])
-
-    # import applescript
-    # resp = applescript.tell.app("System Events", '''
-    # set frontApp to name of first application process whose frontmost is true
-    # return "Done"
-    # ''')
-    # assert resp.code == 0, resp.err
-    # print(resp.out)
-
-
-
-    # import subprocess
-    #
-    # def get_window_title():
-    #     cmd = """
-    #         tell application "System Events"
-    #             set frontApp to name of first application process whose frontmost is true
-    #         end tell
-    #         tell application frontApp
-    #             if the (count of windows) is not 0 then
-    #                 set window_name to name of front window
-    #             end if
-    #         end tell
-    #         return window_name
-    #     """
-    #     result = subprocess.run(['osascript', '-e', cmd], capture_output=True)
-    #     return result.stdout
-
-    print(get_window_title())
+    """
+    Resizes all active table windows to the same size specified in the config
+    """
+    dimensions = '{' + str(int(config['DEFAULT']['table_width']) // 2) + ', '
+    dimensions += str(int(config['DEFAULT']['table_height']) // 2) + '}'
+    applescript.tell.app("System Events", f'''tell application process "Ignition Casino Poker"
+                                                set allWindows to every window
+                                                repeat with aWindow in allWindows
+                                                    set size of aWindow to {dimensions}
+                                                end repeat
+                                              end tell''')
 
 
 def update_window_attributes(hwnd, opened_window) -> None:
