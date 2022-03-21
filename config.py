@@ -6,8 +6,6 @@ import pytesseract as pt
 import re
 import sys
 
-from pathlib import Path
-
 # Update recursion depth (limit) to prevent background refresh threads reaching max recursion depth
 sys.setrecursionlimit(10 ** 6)
 
@@ -48,10 +46,17 @@ STAKE_P = re.compile(r"^(.*?)\/(.*?) ")
 MONEY_P = re.compile("^\$(\d*?\.\d\d)$")  # this pattern only works for games using real $ (not play money)
 
 # Card suits
-SUITS_BY_COLOR = {
-    'red': 'h',
-    'blue': 'd',
-    'green': 'c',
-    'black': 's',
-    'unknown': 'u'
+SUIT_ABBR_COLOR_MAP = {
+    'red': 'h',  # hearts
+    'blue': 'd',  # diamonds
+    'green': 'c',  # clubs
+    'black': 's',  # spades
+    'unknown': 'u'  # unknown
+}
+
+SUIT_RGB_VALS = {
+    'red': [25, 38, 183],  # TODO: fix
+    'green': [60, 158, 84],
+    'blue': [201, 136, 60],  # TODO: fix
+    'black': [0, 0, 0]
 }

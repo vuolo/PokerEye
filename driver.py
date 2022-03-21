@@ -1,4 +1,3 @@
-import multiprocessing as mp
 import numpy as np
 import threading
 import time
@@ -21,6 +20,34 @@ elif config['Environment']['OS'] == 'Windows':
 table_windows = []  # j=0: window object, j=1: window title, j=2: hwnd
 
 
+def refresh_game_states(forever=False) -> None:
+    """
+    Update players in each game state
+    """
+    screenshots = grab_screenshots()
+
+    # Update game_states for each screenshot
+    if screenshots:
+        for title, screenshot in screenshots.items():
+            num_seats = get_num_seats(screenshot)
+            table_id = re.findall(TABLE_ID_P, title)[0]
+            blinds = parse_blinds(title)
+            game_states[table_id] = CashGameState(num_seats=num_seats, table_id=table_id, sb=blinds[0], bb=blinds[1],
+                                                  title=title, screenshot=screenshots[title])
+
+    # Populate players for each game state
+    for game_state in game_states.values():
+        populate_players(game_state)
+
+    # Display all current game states if debugging
+    if config.getboolean('Debug', 'enabled'):
+        display_game_states()
+
+    if forever:
+        time.sleep(float(config.get('DEFAULT', 'game_state_refresh_time_seconds')))
+        refresh_game_states(forever)
+
+
 def display_game_states() -> None:
     """
     Displays all current game states to console
@@ -32,14 +59,46 @@ def display_game_states() -> None:
         log.debug('')
 
 
-# uses tesseract for ocr. Parses an image to string
 def ocr(img, x_scale=1, y_scale=1, config="") -> str:
+    """
+    Uses tesseract for ocr. Parses an image to string
+    :param img: Image to parse
+    :param x_scale: Image scale in the x direction
+    :param y_scale: Image scale in the y direction
+    :param config: Config to use for the ocr call (ex: --psm 10 -c tessedit_char_whitelist=123456789)
+    :return: The parsed string from the image
+    """
     img = cv2.resize(img, None, fx=x_scale, fy=y_scale)
     return pt.image_to_string(img, config=config)
 
 
-# TODO: take in a colored screenshot, then get the suit of the card based on the color of the letter.
+def get_card_suit(card_crop) -> str:
+    """
+    Searches for card suit colors by RGB to determine card suit
+    :param card_crop: Colored screenshot of the card or rank crop
+    :return: Single character abbreviation of the card suit
+    """
+    for row in card_crop:
+        for pixel in row:
+            if np.array_equal(pixel, SUIT_RGB_VALS['red']):
+                return SUIT_ABBR_COLOR_MAP['red']
+            elif np.array_equal(pixel, SUIT_RGB_VALS['green']):
+                return SUIT_ABBR_COLOR_MAP['green']
+            elif np.array_equal(pixel, SUIT_RGB_VALS['blue']):
+                return SUIT_ABBR_COLOR_MAP['blue']
+            elif np.array_equal(pixel, SUIT_RGB_VALS['black']):
+                return SUIT_ABBR_COLOR_MAP['black']
+
+    return SUIT_ABBR_COLOR_MAP['unknown']
+
+
 def get_player_details(seat_crop, seat_location) -> Player:
+    """
+    Uses tesseract to parse a player's data from what is visible on the screenshot
+    :param seat_crop: Screenshot of the player's seat
+    :param seat_location: Name of the seat location (ex: 'bot_left', 'bot_mid', 'bot_right', etc.)
+    :return: Player object initialized with correct player details
+    """
     # Setup screenshot crops for varying info
     seat_crop_gray = cv2.cvtColor(seat_crop, cv2.COLOR_RGB2GRAY)
     player_crops = {
@@ -61,32 +120,34 @@ def get_player_details(seat_crop, seat_location) -> Player:
     position = ''
     stack = 0.0
 
-    # cv2.imshow('_', player_crops['vacant_text'])
+    # cv2.imshow('_', player_crops['cards_both'])
     # cv2.waitKey(0)
 
+    # Grab details if the seat is not vacant
     if not is_vacant:
-        seat_num = int(ocr(img=player_crops['seat_num'], config="--psm 10 -c tessedit_char_whitelist=123456789").strip())
-        stack = float(ocr(img=player_crops['stack'], config="--psm 8 -c tessedit_char_whitelist=0123456789.").strip())
+        seat_num = ocr(img=player_crops['seat_num'], config="--psm 10 -c tessedit_char_whitelist=123456789").strip()
+        seat_num = int(seat_num) if seat_num.isdigit() else 0
+        stack = '0' + ocr(img=player_crops['stack'], config="--psm 8 -c tessedit_char_whitelist=0123456789.").strip()
+        stack = float(stack) if stack.isdigit() else 0.0
 
         # Only retrieve hand if we are looking at the hero
         if seat_location == 'bot_mid':
+            # Convert to grayscale before parsing with tesseract
             card_left_rank_only_gray = cv2.cvtColor(player_crops['card_left_rank_only'], cv2.COLOR_RGB2GRAY)
             card_right_rank_only_gray = cv2.cvtColor(player_crops['card_right_rank_only'], cv2.COLOR_RGB2GRAY)
 
+            # Find card rank
             card_ranks = '1234567890AKJQ'
             tesseract_cards_config = f"--psm 8 -c tessedit_char_whitelist={card_ranks}"
             card_left_str = ocr(img=card_left_rank_only_gray, config=tesseract_cards_config).strip()
             card_right_str = ocr(img=card_right_rank_only_gray, config=tesseract_cards_config).strip()
 
-            # TODO: use https://stackoverflow.com/questions/47483951/how-to-define-a-threshold-value-to-detect-only-green-colour-objects-in-an-image
-            # TODO: To check for colors to determin suit
-            card_left_color = 'unknown'
-            card_right_color = 'unknown'
+            # Ensure a card is found before determining suit
+            if len(card_left_str) > 0 and len(card_right_str) > 0:
+                card_left_suit = get_card_suit(player_crops['card_left_rank_only'])
+                card_right_suit = get_card_suit(player_crops['card_right_rank_only'])
 
-            log.debug(np.unique(player_crops['card_left_rank_only'], axis=0, return_counts=True))
-
-            hand = card_left_str + SUITS_BY_COLOR[card_left_color] + ' '  # left card
-            hand += card_right_str + SUITS_BY_COLOR[card_right_color]  # right card
+                hand = card_left_str + card_left_suit + ' ' + card_right_str + card_right_suit  # ex: 9d Jh
 
     return Player(seat_location=seat_location, seat_num=seat_num, is_hero=seat_location == 'bot_mid',
                   is_vacant=is_vacant, hand=hand, position=position, stack=stack)
@@ -125,11 +186,13 @@ def get_seat_crops(screenshot, num_seats) -> dict:
     """
     board = get_static_crop(screenshot, 'board')
 
+    # TODO: add 2 handed, 3 handed, and 6 handed
     if num_seats == 9:
         return {
             # 'bot_left': board[601:601 + 180, 347:347 + 255],
             'bot_mid': board[625:625 + 180, 695:695 + 255],
             # 'bot_right': board[601:601 + 180, 1043:1043 + 255]
+            # TODO: add the rest of the seat locations
         }
 
 
@@ -247,6 +310,78 @@ def window_already_found(hwnd, windows=table_windows) -> bool:
     return False
 
 
+def capture_bounds(bbox) -> object:
+    """
+    Captures a screenshot of the specified bounds
+    :param bbox: Bounds box tuple (x1, y1, x2, y2)
+    :return: Image returned by PIL ImageGrab.grab()
+    """
+    screenshot = np.array(ImageGrab.grab(bbox))  # convert to array full of bgr vals
+    screenshot = cv2.cvtColor(screenshot, cv2.COLOR_BGR2RGB)  # convert from bgr to rgb (for OpenCV)
+    return screenshot
+
+
+def grab_screenshots(table_id=None) -> dict:
+    """
+    Grabs screenshots of all open table windows
+    :param table_id: HWND (window number) of the table. Optional parameter to grab a single table screenshot
+    :return: Object full of screenshots represented as rgb val numpy arrays
+    """
+    ret = {}
+    for table_window in table_windows:
+        if table_id and table_id != table_window[2]:  # allow for specific screenshots of a table by id
+            continue
+        hwnd = table_window[2]
+        title = table_window[1]
+        bbox_raw = table_window[0]['kCGWindowBounds']  # bounds box
+        bbox = (
+            bbox_raw['X'] * 2,  # x1
+            bbox_raw['Y'] * 2,  # y1
+            bbox_raw['X'] * 2 + bbox_raw['Width'] * 2,  # x2
+            bbox_raw['Y'] * 2 + bbox_raw['Height'] * 2  # y2
+        )
+
+        # TODO: add multi display support
+        screenshot = capture_bounds(bbox)
+        if not is_valid_screenshot(screenshot):
+            continue
+
+        # Update return dict
+        ret[f'{str(title)} {str(hwnd)}'] = screenshot
+
+    return None if len(ret) == 0 else ret
+
+
+def update_screenshots(forever=False) -> None:
+    """
+    Updates screenshot of each game_state
+    """
+    screenshots = grab_screenshots()
+    if screenshots:
+        for title, screenshot in screenshots.items():
+            table_id = re.findall(TABLE_ID_P, title)[0]
+            if table_id in game_states:
+                game_states[table_id].set_screenshot(screenshot)
+
+    if forever:
+        time.sleep(float(config.get('DEFAULT', 'screenshot_refresh_time_seconds')))
+        update_screenshots(forever)
+
+
+# TODO: implement multiprocessing?
+def begin_background_refresh(func) -> None:
+    """
+    Initializes a new thread that repeats a specified function forever
+    :param func: Specified function to run
+    """
+    if func == 'refresh_table_windows':
+        threading.Thread(target=refresh_table_windows, args=(True,)).start()
+    elif func == 'update_screenshots':
+        threading.Thread(target=update_screenshots, args=(True,)).start()
+    elif func == 'refresh_game_states':
+        threading.Thread(target=refresh_game_states, args=(True,)).start()
+
+
 def refresh_table_windows(forever=False) -> None:
     """
     Updates table_windows (recurs until found)
@@ -310,108 +445,15 @@ def refresh_table_windows(forever=False) -> None:
         refresh_table_windows(forever)
 
 
-def capture_bounds(bbox) -> object:
-    """
-    Captures a screenshot of the specified bounds
-    :param bbox: Bounds box tuple (x1, y1, x2, y2)
-    :return: Image returned by PIL ImageGrab.grab()
-    """
-    screenshot = np.array(ImageGrab.grab(bbox))  # convert to array full of bgr vals
-    screenshot = cv2.cvtColor(screenshot, cv2.COLOR_BGR2RGB)  # convert from bgr to rgb (for OpenCV)
-    return screenshot
-
-
-def grab_screenshots(table_id=None) -> dict:
-    """
-    Grabs screenshots of all open table windows
-    :param table_id: HWND (window number) of the table. Optional parameter to grab a single table screenshot
-    :return: Object full of screenshots represented as rgb val numpy arrays
-    """
-    ret = {}
-    for table_window in table_windows:
-        if table_id and table_id != table_window[2]:  # allow for specific screenshots of a table by id
-            continue
-        hwnd = table_window[2]
-        title = table_window[1]
-        bbox_raw = table_window[0]['kCGWindowBounds']  # bounds box
-        bbox = (
-            bbox_raw['X'] * 2,  # x1
-            bbox_raw['Y'] * 2,  # y1
-            bbox_raw['X'] * 2 + bbox_raw['Width'] * 2,  # x2
-            bbox_raw['Y'] * 2 + bbox_raw['Height'] * 2  # y2
-        )
-
-        # TODO: add multi display support
-        while True:
-            screenshot = capture_bounds(bbox)
-            if is_valid_screenshot(screenshot):
-                break
-            # Halt until a valid screenshot is found
-            time.sleep(float(config.get('DEFAULT', 'screenshot_refresh_time_seconds')))
-
-        # Update return dict
-        ret[f'{str(title)} {str(hwnd)}'] = screenshot
-
-    return None if len(ret) == 0 else ret
-
-
-def setup_tables() -> dict:
-    """
-    Begins background refresh for grabbing table screenshots
-    :return: Table screenshots from the grab_screenshots() function
-    """
-    # Initial table refresh (hangs until found)
-    refresh_table_windows()
-
-    # Begin background refresh for table windows
-    threading.Thread(target=refresh_table_windows, args=(True,)).start()
-
-    return grab_screenshots()
-
-
-def update_screenshots(forever=False) -> None:
-    """
-    Updates screenshot of each game_state
-    """
-    screenshots = grab_screenshots()
-    if screenshots:
-        for title, screenshot in screenshots.items():
-            table_id = re.findall(TABLE_ID_P, title)[0]
-            game_states[table_id].set_screenshot(screenshot)
-
-    if forever:
-        # Display all current game states if debugging
-        if config.getboolean('Debug', 'enabled'):
-            display_game_states()
-
-        time.sleep(float(config.get('DEFAULT', 'screenshot_refresh_time_seconds')))
-        update_screenshots(forever)
-
-
 def init() -> None:
     """
     Called on startup. Responsible for initialization of game_state objects
     """
-    screenshots = setup_tables()
-
-    # Update game_states for each screenshot
-    for title, screenshot in screenshots.items():
-        num_seats = get_num_seats(screenshot)
-        table_id = re.findall(TABLE_ID_P, title)[0]
-        blinds = parse_blinds(title)
-        game_states[table_id] = CashGameState(num_seats=num_seats, table_id=table_id, sb=blinds[0], bb=blinds[1],
-                                              title=title, screenshot=screenshots[title])
-
-    # Setup each Player objects in each game state
-    for game_state in game_states.values():
-        populate_players(game_state)
-
-    # Begin background refresh for table screenshots
-    threading.Thread(target=update_screenshots, args=(True,)).start()
+    begin_background_refresh('refresh_table_windows')
+    begin_background_refresh('update_screenshots')
+    begin_background_refresh('refresh_game_states')
 
 
 if __name__ == '__main__':
-    # TODO: use mp.Pool(num_seats) later (not in this func) to parse player chip stacks using mp with tesseract
-    mp.set_start_method('spawn')
     game_states = {}
     init()

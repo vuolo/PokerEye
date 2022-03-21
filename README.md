@@ -3,8 +3,7 @@
 
 ***
 
- Must use these settings (more flexibility coming soon):
- * Dark Green background
+ Must use these settings:
  * 4 colored default deck
- * Orange cards
  * Preferred seat for each orientation must be bottom middle
+ * Notifications menu must be closed
