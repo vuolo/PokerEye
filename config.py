@@ -2,6 +2,7 @@ import configparser
 import cv2
 import logging as log
 import platform
+import pytesseract as pt
 import re
 import sys
 
@@ -32,11 +33,7 @@ if config.getboolean('Debug', 'enabled'):
 
 # GLOBALS ==============================================================================================================
 
-# Initialize templates by converting to grayscale and sorting by file name
-TEMPLATES = [cv2.imread(str(_), cv2.IMREAD_GRAYSCALE) for _ in sorted(Path(config['Paths']['table_patterns_dir']).glob('*'))]
-HEADS_UP_TEMPLATES = TEMPLATES[7:8]
-SIX_HANDED_TEMPLATES = TEMPLATES[0:4]
-NINE_HANDED_TEMPLATES = TEMPLATES[3:7]
+WATERMARK_TEMPLATE = cv2.imread(config['Paths']['templates_dir'] + '/watermark.bmp')
 
 # (width, height), -1 means the dimension is infinitely dynamic
 TITLE_BAR_DIMENSIONS = [-1, 50]
@@ -49,3 +46,12 @@ TABLE_ID_P = re.compile(r" (\d*?)$")
 STAKE_P = re.compile(r"^(.*?)\/(.*?) ")
 # TODO: update template below to allow for play money (used in tournament/sit & go games), also add check w/out cents
 MONEY_P = re.compile("^\$(\d*?\.\d\d)$")  # this pattern only works for games using real $ (not play money)
+
+# Card suits
+SUITS_BY_COLOR = {
+    'red': 'h',
+    'blue': 'd',
+    'green': 'c',
+    'black': 's',
+    'unknown': 'u'
+}
