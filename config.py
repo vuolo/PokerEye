@@ -60,3 +60,5 @@ SUIT_RGB_VALS = {
     'blue': [201, 136, 60],  # TODO: fix
     'black': [0, 0, 0]
 }
+
+CARD_RANKS = '1234567890AKJQ'

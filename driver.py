@@ -20,6 +20,36 @@ elif config['Environment']['OS'] == 'Windows':
 table_windows = []  # j=0: window object, j=1: window title, j=2: hwnd
 
 
+def update_board(game_state) -> None:
+    """
+    Reads the board from the screenshot and stores it in the game_state
+    :param game_state: CashGameState object
+    """
+    table = get_static_crop(game_state.screenshot, 'table')
+    board_crops = {'full': table[365:365 + 165, 500:500 + (110 * 5) + (22 * 4)]}
+    board_crops['card_1'] = board_crops['full'][0:-1, 0:110]
+    board_crops['card_2'] = board_crops['full'][0:-1, 110 + 22:(110 * 2) + 22]
+    board_crops['card_3'] = board_crops['full'][0:-1, (110 * 2) + (22 * 2):(110 * 3) + (22 * 2)]
+    board_crops['card_4'] = board_crops['full'][0:-1, (110 * 3) + (22 * 3):(110 * 4) + (22 * 3)]
+    board_crops['card_5'] = board_crops['full'][0:-1, (110 * 4) + (22 * 4):-1]
+
+    cards = []
+    for i in range(1, 6):
+        card = parse_card(board_crops['card_' + str(i)], 'large')
+        if card:
+            cards.append(card)
+
+    board = ''
+    for i in range(5):  # 5 max cards on the board
+        if i >= len(cards):
+            board += '[] '  # hidden cards
+        else:
+            board += cards[i] + ' '
+
+    board.strip()
+    game_state.set_board(board)
+
+
 def refresh_game_states(forever=False) -> None:
     """
     Update players in each game state
@@ -38,6 +68,8 @@ def refresh_game_states(forever=False) -> None:
     # Populate players for each game state
     for game_state in game_states.values():
         populate_players(game_state)
+        update_board(game_state)
+        # calc_statistics(game_state)
 
     # Display all current game states if debugging
     if config.getboolean('Debug', 'enabled'):
@@ -48,15 +80,21 @@ def refresh_game_states(forever=False) -> None:
         refresh_game_states(forever)
 
 
+# TODO: display statistics
 def display_game_states() -> None:
     """
     Displays all current game states to console
     """
     for key, value in game_states.items():
-        log.debug(f'Game: {value.title}')
+        log.debug(f'### Table {value.table_id}: {value.title.replace(value.table_id, "")}')
+        log.debug(' | ')
+        log.debug(' | Board:')
+        log.debug(' | ' + value.board)
+        log.debug(' | ')
+        log.debug(' | Players:')
         for key2, value2 in value.players.items():
-            log.debug(f'Player: {value2.__dict__}')
-        log.debug('')
+            log.debug(f' | Player {value2.seat_num}: {value2.__dict__}')
+        log.debug(' | \n')
 
 
 def ocr(img, x_scale=1, y_scale=1, config="") -> str:
@@ -92,6 +130,31 @@ def get_card_suit(card_crop) -> str:
     return SUIT_ABBR_COLOR_MAP['unknown']
 
 
+def parse_card(card_crop, size='small') -> str:
+    """
+    Parses a screenshot of a card into a two character representation of the card (ex: Js or Td)
+    :param card_crop: Cropped screenshot of a single card
+    :param size: 'small' cards represent the hand's card size, 'large' cards represent the cards on the board
+    :return:
+    """
+    if size == 'small':
+        rank_crop = card_crop[0:50, 10:-30]
+    else:
+        rank_crop = card_crop[0:80, 10:-30]
+
+    # Convert to grayscale and find rank
+    rank_crop_gray = cv2.cvtColor(rank_crop, cv2.COLOR_RGB2GRAY)
+    rank_ocr_config = f'--psm 7 -c tessedit_char_whitelist={CARD_RANKS}'
+    rank_str = ocr(img=rank_crop_gray, config=rank_ocr_config).strip().replace('10', 'T')
+
+    # Ensure a card is found before determining suit
+    if len(rank_str) > 0:
+        suit = get_card_suit(rank_crop)
+        return '' if suit == 'u' else (rank_str + suit)
+
+    return ''
+
+
 def get_player_details(seat_crop, seat_location) -> Player:
     """
     Uses tesseract to parse a player's data from what is visible on the screenshot
@@ -104,14 +167,12 @@ def get_player_details(seat_crop, seat_location) -> Player:
     player_crops = {
         'cards_both': seat_crop[0:110, 40:205],  # Note this crop is in color to check suit
         'seat_num': seat_crop_gray[130:160, 20:50],
-        'stack': seat_crop_gray[125:-20, 60:230],  # TODO: fix why 1 sometimes shows up as 4...?
+        'stack': seat_crop_gray[125:-20, 60:230],  # TODO: fix why 1 sometimes shows up as 4...
         'button': [],  # TODO: button moves dynamically based on spot - right/left positions have it to the left/right
         'vacant_text': seat_crop_gray[110:-15, 85:170]
     }
     player_crops['card_left'] = player_crops['cards_both'][0:-1, 0:80]
-    player_crops['card_left_rank_only'] = player_crops['card_left'][0:50, 10:-30]
     player_crops['card_right'] = player_crops['cards_both'][0:-1, 85:165]
-    player_crops['card_right_rank_only'] = player_crops['card_right'][0:50, 10:-30]
 
     # Setup default attributes
     is_vacant = True if 'vacant' in ocr(img=player_crops['vacant_text'], config="--psm 8").lower() else False
@@ -120,34 +181,16 @@ def get_player_details(seat_crop, seat_location) -> Player:
     position = ''
     stack = 0.0
 
-    # cv2.imshow('_', player_crops['cards_both'])
-    # cv2.waitKey(0)
-
     # Grab details if the seat is not vacant
     if not is_vacant:
         seat_num = ocr(img=player_crops['seat_num'], config="--psm 10 -c tessedit_char_whitelist=123456789").strip()
         seat_num = int(seat_num) if seat_num.isdigit() else 0
-        stack = '0' + ocr(img=player_crops['stack'], config="--psm 8 -c tessedit_char_whitelist=0123456789.").strip()
+        stack = '0' + ocr(img=player_crops['stack'], config="--psm 7 -c tessedit_char_whitelist=0123456789.").strip()
         stack = float(stack) if stack.isdigit() else 0.0
 
         # Only retrieve hand if we are looking at the hero
         if seat_location == 'bot_mid':
-            # Convert to grayscale before parsing with tesseract
-            card_left_rank_only_gray = cv2.cvtColor(player_crops['card_left_rank_only'], cv2.COLOR_RGB2GRAY)
-            card_right_rank_only_gray = cv2.cvtColor(player_crops['card_right_rank_only'], cv2.COLOR_RGB2GRAY)
-
-            # Find card rank
-            card_ranks = '1234567890AKJQ'
-            tesseract_cards_config = f"--psm 8 -c tessedit_char_whitelist={card_ranks}"
-            card_left_str = ocr(img=card_left_rank_only_gray, config=tesseract_cards_config).strip()
-            card_right_str = ocr(img=card_right_rank_only_gray, config=tesseract_cards_config).strip()
-
-            # Ensure a card is found before determining suit
-            if len(card_left_str) > 0 and len(card_right_str) > 0:
-                card_left_suit = get_card_suit(player_crops['card_left_rank_only'])
-                card_right_suit = get_card_suit(player_crops['card_right_rank_only'])
-
-                hand = card_left_str + card_left_suit + ' ' + card_right_str + card_right_suit  # ex: 9d Jh
+            hand = (parse_card(player_crops['card_left']) + ' ' + parse_card(player_crops['card_right'])).strip()
 
     return Player(seat_location=seat_location, seat_num=seat_num, is_hero=seat_location == 'bot_mid',
                   is_vacant=is_vacant, hand=hand, position=position, stack=stack)
@@ -162,7 +205,7 @@ def get_static_crop(screenshot, section):
     """
     width = screenshot.shape[1]
     height = screenshot.shape[0]
-    board_height = height - (TITLE_BAR_DIMENSIONS[1] + HEADER_DIMENSIONS[1] + FOOTER_DIMENSIONS[1])
+    table_height = height - (TITLE_BAR_DIMENSIONS[1] + HEADER_DIMENSIONS[1] + FOOTER_DIMENSIONS[1])
 
     if section == 'title_bar':
         return screenshot[0:TITLE_BAR_DIMENSIONS[1], 0:width - 1]
@@ -172,9 +215,9 @@ def get_static_crop(screenshot, section):
         return screenshot[TITLE_BAR_DIMENSIONS[1]:(TITLE_BAR_DIMENSIONS[1] + HEADER_DIMENSIONS[1]), 0:width - 1]
     elif section == 'footer':
         return screenshot[(height - 1 - FOOTER_DIMENSIONS[1]):height - 1, 0:width - 1]
-    elif section == 'board':
+    elif section == 'table':
         return screenshot[(TITLE_BAR_DIMENSIONS[1] + HEADER_DIMENSIONS[1]):(height - 1 - FOOTER_DIMENSIONS[1]),
-               0:width - 1]
+                          0:width - 1]
 
 
 def get_seat_crops(screenshot, num_seats) -> dict:
@@ -184,14 +227,14 @@ def get_seat_crops(screenshot, num_seats) -> dict:
     :param num_seats: Number of seats available for the table
     :return: Dictionary full of cropped screenshots of each seat
     """
-    board = get_static_crop(screenshot, 'board')
+    table = get_static_crop(screenshot, 'table')
 
     # TODO: add 2 handed, 3 handed, and 6 handed
     if num_seats == 9:
         return {
-            # 'bot_left': board[601:601 + 180, 347:347 + 255],
-            'bot_mid': board[625:625 + 180, 695:695 + 255],
-            # 'bot_right': board[601:601 + 180, 1043:1043 + 255]
+            # 'bot_left': table[601:601 + 180, 347:347 + 255],
+            'bot_mid': table[625:625 + 180, 695:695 + 255],
+            # 'bot_right': table[601:601 + 180, 1043:1043 + 255]
             # TODO: add the rest of the seat locations
         }
 
@@ -283,8 +326,9 @@ def validate_table_windows(opened_windows) -> None:
     """
     for i in range(0, len(table_windows)):
         if not window_already_found(table_windows[i][2], opened_windows):
-            log.debug('Table closed: {0} [{1}]'
+            log.debug('Table closed: {0} [{1}]'  # Title [ID]
                       .format(table_windows[i][1], table_windows[i][2]))
+            game_states.pop(str(table_windows[i][2]))
             table_windows.pop(i)
             validate_table_windows(opened_windows)
             break
@@ -368,18 +412,23 @@ def update_screenshots(forever=False) -> None:
         update_screenshots(forever)
 
 
-# TODO: implement multiprocessing?
-def begin_background_refresh(func) -> None:
+def begin_background_refresh(func_str) -> None:
     """
     Initializes a new thread that repeats a specified function forever
-    :param func: Specified function to run
+    :param func_str: Specified function to run
     """
-    if func == 'refresh_table_windows':
-        threading.Thread(target=refresh_table_windows, args=(True,)).start()
-    elif func == 'update_screenshots':
-        threading.Thread(target=update_screenshots, args=(True,)).start()
-    elif func == 'refresh_game_states':
-        threading.Thread(target=refresh_game_states, args=(True,)).start()
+    def repeat_forever(func):
+        forever_thread = threading.Thread(target=func, args=(True,))
+        forever_thread.start()
+        forever_thread.join()
+        repeat_forever(func)
+
+    if func_str == 'refresh_table_windows':
+        threading.Thread(target=repeat_forever, args=(refresh_table_windows,)).start()
+    elif func_str == 'update_screenshots':
+        threading.Thread(target=repeat_forever, args=(update_screenshots,)).start()
+    elif func_str == 'refresh_game_states':
+        threading.Thread(target=repeat_forever, args=(refresh_game_states,)).start()
 
 
 def refresh_table_windows(forever=False) -> None:

@@ -5,8 +5,12 @@ class CashGameState:
         self.sb: float = sb
         self.bb: float = bb
         self.title: str = title
+        self.board: str = '[] [] [] [] []'
         self.screenshot = screenshot
         self.players: dict = {}
+
+    def set_board(self, board: str):
+        self.board: str = board
 
     def set_players(self, players: dict):
         self.players: dict = players
