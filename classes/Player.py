@@ -6,6 +6,6 @@ class Player:
         self.is_hero: bool = is_hero
         self.is_vacant: bool = is_vacant
 
-        self.hand: str = hand
+        self.hand: str = hand or '[] []'
         self.position: str = position  # TODO: continuously update position based on # of non-vacant players and button
         self.stack: float = stack

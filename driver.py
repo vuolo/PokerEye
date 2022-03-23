@@ -2,6 +2,7 @@ import numpy as np
 import threading
 import time
 import tkinter as tk
+from tkinter import font
 
 from PIL import ImageGrab
 
@@ -36,6 +37,9 @@ def update_gfx():
 
     # Display formatted gfx for each game_state
     for game_state in game_states.values():
+        if not grab_screenshots(game_state.table_id):
+            hide_gfx()
+            break
         show_gfx()
         gfx_width = 200
         geometry_str = '{0}x{1}+{2}+{3}'.format(gfx_width, int(game_state.bbox['Height']),
@@ -43,19 +47,31 @@ def update_gfx():
         gfx.geometry(geometry_str)
 
         # Update displayed data for game_state
-        board_contents.config(text=game_state.board)
+        # Prevent incorrectly displaying an empty board after the flop
+        if game_state.pot == 0.0:
+            board_label.config(text=game_state.board)
+        elif game_state.board.count('[]') != 5:
+            board_label.config(text=game_state.board)
 
-        # TODO: add gfx for multiple tables
+        pot_label.config(text=f'${game_state.pot}')
+
+        # TODO: display other player information
+        for seat_num, player in game_state.players.items():
+            hero_stack_label.config(text=f'${player.stack} (~{int(player.stack // game_state.bb)} BB)')
+            hero_hand_label.config(text=player.hand)
+            break
+
+        # TODO: add gfx support for more than 1 table
         break
 
-    gfx.after(int(1000 * float(config.get('DEFAULT', 'gfx_update_time_seconds'))), update_gfx)
+    gfx.after(int(1000 * float(config.get('DEFAULT', 'gfx_update_time_seconds'))), update_gfx)  # convert to ms
 
 
 def init_gfx():
     """
     Initializes hidden gfx windows
     """
-    global gfx, board_contents
+    global gfx, board_label, pot_label, hero_stack_label, hero_hand_label
     width = int(config.get('DEFAULT', 'table_window_width')) // 2
     gfx = tk.Tk()
     gfx.wm_overrideredirect(True)
@@ -63,11 +79,23 @@ def init_gfx():
     gfx.configure(bg='black')
 
     # Initialize labels
-    header = tk.Label(text='PokerEye', font=("Helvetica", 18), fg='yellow', bg='black')
-    header.place(x=58, y=5)
+    header_label = tk.Label(text='PokerEye', font=("Arial Black", 18), fg='yellow', bg='black')
+    header_label.place(x=55, y=5)
 
-    board_contents = tk.Label(font=("TkFixedFont", 42), fg='cyan', bg='black')
-    board_contents.place(x=15, y=40)
+    board_label = tk.Label(text='[] [] [] [] []', font=("Courier", 20), fg='cyan', bg='black')
+    board_label.place(x=13, y=40)
+
+    pot_label = tk.Label(font=("Arial", 16), fg='cyan', bg='black')
+    pot_label.place(x=75, y=71)
+
+    hero_header_label = tk.Label(text='Stats', font=("Arial Black", 18), fg='yellow', bg='black')
+    hero_header_label.place(x=10, y=90)
+
+    hero_stack_label = tk.Label(font=("Arial", 16), fg='yellow', bg='black')
+    hero_stack_label.place(x=10, y=120)
+
+    hero_hand_label = tk.Label(text='[] []', font=("Courier", 20), fg='yellow', bg='black')
+    hero_hand_label.place(x=10, y=145)
 
     # Begin main gfx update loop
     update_gfx()
@@ -86,6 +114,15 @@ def update_board(game_state: object) -> None:
     board_crops['card_3'] = board_crops['full'][0:-1, (110 * 2) + (22 * 2):(110 * 3) + (22 * 2)]
     board_crops['card_4'] = board_crops['full'][0:-1, (110 * 3) + (22 * 3):(110 * 4) + (22 * 3)]
     board_crops['card_5'] = board_crops['full'][0:-1, (110 * 4) + (22 * 4):-1]
+    board_crops['pot'] = table[260:260 + 53, 620:620 + 400]
+
+    pot_crop_gray = cv2.cvtColor(board_crops['pot'], cv2.COLOR_RGB2GRAY)
+    pot_str = ocr(img=pot_crop_gray, config='--psm 7').strip().replace(',', '').replace(' ', '')
+    pot_str = '.'.join(re.findall(POT_P, pot_str))
+    # Fix incorrect decimal points in place of commas
+    if pot_str.count('.') > 1:
+        pot_str = pot_str.replace('.', '', pot_str.count('.') - 1)
+    game_state.set_pot(float(pot_str) if pot_str else 0.0)
 
     cards = []  # 5 max cards on the board
     for card_num in range(1, 6):
@@ -126,7 +163,7 @@ def refresh_game_states(forever=False) -> None:
         # calc_statistics(game_state)
 
     # Display all current game states if debugging
-    if config.getboolean('Debug', 'enabled'):
+    if config.getboolean('Debug', 'enabled') and config.getboolean('Debug', 'display_game_states_to_terminal'):
         display_game_states()
 
     if forever:
@@ -139,15 +176,20 @@ def display_game_states() -> None:
     """
     Displays all current game states to console
     """
-    for key, value in game_states.items():
-        log.debug(f'### Table {value.table_id}: {value.title.replace(value.table_id, "")}')
+    for table_id, game_state in game_states.items():
+        log.debug(f'### Table {game_state.table_id}: {game_state.title.replace(game_state.table_id, "")}')
+        if not grab_screenshots(game_state.table_id):
+            log.debug(' | ')
+            log.debug(' | Unable to view the table window... Ensure the full table window visible.')
+            log.debug(' | \n')
+            continue
         log.debug(' | ')
-        log.debug(' | Board:')
-        log.debug(' | ' + value.board)
+        log.debug(' | Board ' + f'(${game_state.pot}):')
+        log.debug(' | ' + game_state.board)
         log.debug(' | ')
         log.debug(' | Players:')
-        for key2, value2 in value.players.items():
-            log.debug(f' | Player {value2.seat_num}: {value2.__dict__}')
+        for seat_num, player in game_state.players.items():
+            log.debug(f' | Player {seat_num}: {player.__dict__}')
         log.debug(' | \n')
 
 
@@ -221,9 +263,9 @@ def get_player_details(seat_crop, seat_location) -> Player:
     player_crops = {
         'cards_both': seat_crop[0:110, 40:205],  # Note this crop is in color to check suit
         'seat_num': seat_crop_gray[130:160, 20:50],
-        'stack': seat_crop_gray[125:-20, 60:230],  # TODO: fix why 1 sometimes shows up as 4...
+        'stack': seat_crop_gray[120:-15, 60:230],  # TODO: fix why 1 sometimes shows up as 4...
         'button': [],  # TODO: button moves dynamically based on spot - right/left positions have it to the left/right
-        'vacant_text': seat_crop_gray[110:-15, 85:170]
+        'vacant_text': seat_crop_gray[115:-20, 85:170]
     }
     player_crops['card_left'] = player_crops['cards_both'][0:-1, 0:80]
     player_crops['card_right'] = player_crops['cards_both'][0:-1, 85:165]
@@ -231,16 +273,20 @@ def get_player_details(seat_crop, seat_location) -> Player:
     # Setup default attributes
     is_vacant = True if 'vacant' in ocr(img=player_crops['vacant_text'], config="--psm 8").lower() else False
     seat_num = -1
-    hand = ''
+    hand = '[] []'
     position = ''
     stack = 0.0
 
     # Grab details if the seat is not vacant
     if not is_vacant:
-        seat_num = ocr(img=player_crops['seat_num'], config="--psm 10 -c tessedit_char_whitelist=123456789").strip()
-        seat_num = int(seat_num) if seat_num.isdigit() else 0
-        stack = '0' + ocr(img=player_crops['stack'], config="--psm 7 -c tessedit_char_whitelist=0123456789.").strip()
-        stack = float(stack) if stack.isdigit() else 0.0
+        seat_num_str = ocr(img=player_crops['seat_num'], config="--psm 10 -c tessedit_char_whitelist=123456789").strip()
+        seat_num = int(seat_num_str) if seat_num_str.isdigit() else 0
+        stack_str = '0' + ocr(img=player_crops['stack'], config="--psm 7 -c tessedit_char_whitelist=0123456789,.")
+        stack_str = stack_str.strip().replace(',', '')
+        # Fix incorrect decimal points in place of commas
+        if stack_str.count('.') > 1:
+            stack_str = stack_str.replace('.', '', stack_str.count('.') - 1)
+        stack = float(stack_str) if FLOAT_P.match(stack_str) else 0.0
 
         # Only retrieve hand if we are looking at the hero
         if seat_location == 'bot_mid':
@@ -507,7 +553,7 @@ def refresh_table_windows(forever=False) -> None:
         for opened_window in opened_windows:
             if opened_window['kCGWindowOwnerName'] == 'Ignition Casino Poker':
                 window_name = opened_window.get('kCGWindowName', None)
-                hwnd = opened_window['kCGWindowNumber']
+                hwnd = str(opened_window['kCGWindowNumber'])
                 opened_windows_formatted.append([opened_window, window_name, hwnd])
                 if window_name is None:
                     log.error('Unable to read window titles... Ensure you have enabled Screen Recording privileges for '

@@ -9,6 +9,8 @@ class CashGameState:
         self.screenshot: object = screenshot
         self.bbox: dict = bbox
         self.players: dict = {}
+        self.pot: float = 0.0
+        self.is_visible: bool = False
 
     def add_player(self, player: dict):
         self.players[str(player.seat_num)] = player
@@ -21,3 +23,6 @@ class CashGameState:
 
     def set_screenshot(self, screenshot):
         self.screenshot = screenshot
+
+    def set_pot(self, pot: float):
+        self.pot: float = pot

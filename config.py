@@ -44,13 +44,15 @@ TABLE_ID_P = re.compile(r" (\d*?)$")
 STAKE_P = re.compile(r"^(.*?)\/(.*?) ")
 # TODO: update template below to allow for play money (used in tournament/sit & go games), also add check w/out cents
 MONEY_P = re.compile("^\$(\d*?\.\d\d)$")  # this pattern only works for games using real $ (not play money)
+FLOAT_P = re.compile(r'\d+(\.\d+)?$')
+POT_P = re.compile(r"[0-9]+")
 
-# Card suits
+# Card suits (alternate variations: h♥♡, d♦♢, c♣♧, s♠♤)
 SUIT_ABBR_COLOR_MAP = {
-    'red': 'h',  # hearts
-    'blue': 'd',  # diamonds
-    'green': 'c',  # clubs
-    'black': 's',  # spades
+    'red': '♥',  # hearts
+    'blue': '♦',  # diamonds
+    'green': '♣',  # clubs
+    'black': '♠',  # spades
     'unknown': 'u'  # unknown
 }
 
