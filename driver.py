@@ -7,20 +7,77 @@ from PIL import ImageGrab
 from config import *
 from classes.CashGameState import CashGameState
 from classes.Player import Player
+from classes.Graphics import Graphics
 
 # MacOS
-if config['Environment']['OS'] == 'Darwin':
+if config.get('Environment', 'OS') == 'Darwin':
     import Quartz
     import applescript
 
 # Windows (to be implemented...)
-elif config['Environment']['OS'] == 'Windows':
+elif config.get('Environment', 'OS') == 'Windows':
     pass
 
 table_windows = []  # j=0: window object, j=1: window title, j=2: hwnd
 
 
-def update_board(game_state) -> None:
+def deallocate_gfx(table_id: str) -> None:
+    """
+    Hide graphics for table and allow for reallocation to new table window
+    :param table_id: HWND (window number) of the table
+    """
+    if table_id in gfx:
+        # Check for available gfx spots to deallocate to
+        for loc in range(int(config.get('DEFAULT', 'max_gfx_windows'))):
+            if loc not in gfx:
+                gfx[table_id].hide()
+                gfx[loc] = gfx.pop(table_id)
+
+
+def allocate_gfx(table_id: str) -> bool:
+    """
+    Allocate the current table to an empty graphics window
+    :param table_id: HWND (window number) of the table
+    :return: Boolean indicating whether the graphics window was successfully allocated
+    """
+    for loc in range(int(config.get('DEFAULT', 'max_gfx_windows'))):
+        if loc in gfx:
+            gfx[table_id] = gfx.pop(loc)
+            # TODO: fix RuntimeError: "main thread is not in main loop" by using: https://stackoverflow.com/questions/47934144/update-data-in-a-tkinter-gui-with-data-from-a-second-thread
+            gfx[table_id].show()
+            return True
+    return False
+
+
+def update_gfx(table_id: str) -> bool:
+    """
+    Attempts to update a graphics window (allocates the table to a new window if needed)
+    :param table_id: HWND (window number) of the table
+    :return: Boolean indicating whether the graphics window was successfully updated
+    """
+    if table_id in gfx:
+        gfx[table_id].update(game_states[table_id])
+        return True
+    else:
+        if allocate_gfx(table_id):
+            gfx[table_id].update(game_states[table_id])
+            return True
+        else:
+            log.error(
+                'Unable to display graphics for the newly opened table... To allow more graphics windows, '
+                'modify the [DEFAULT] \'max_gfx_windows\' setting in config.ini')
+    return False
+
+
+def init_gfx():
+    """
+    Initializes hidden gfx windows
+    """
+    for loc in range(int(config.get('DEFAULT', 'max_gfx_windows'))):
+        gfx[loc] = Graphics(int(config.get('DEFAULT', 'table_window_width')) // 2)
+
+
+def update_board(game_state: object) -> None:
     """
     Reads the board from the screenshot and stores it in the game_state
     :param game_state: CashGameState object
@@ -33,18 +90,18 @@ def update_board(game_state) -> None:
     board_crops['card_4'] = board_crops['full'][0:-1, (110 * 3) + (22 * 3):(110 * 4) + (22 * 3)]
     board_crops['card_5'] = board_crops['full'][0:-1, (110 * 4) + (22 * 4):-1]
 
-    cards = []
-    for i in range(1, 6):
-        card = parse_card(board_crops['card_' + str(i)], 'large')
+    cards = []  # 5 max cards on the board
+    for card_num in range(1, 6):
+        card = parse_card(board_crops['card_' + str(card_num)], 'large')
         if card:
             cards.append(card)
 
     board = ''
-    for i in range(5):  # 5 max cards on the board
-        if i >= len(cards):
+    for card_num in range(1, 6):
+        if card_num > len(cards):
             board += '[] '  # hidden cards
         else:
-            board += cards[i] + ' '
+            board += cards[card_num - 1] + ' '
 
     board.strip()
     game_state.set_board(board)
@@ -59,11 +116,11 @@ def refresh_game_states(forever=False) -> None:
     # Update game_states for each screenshot
     if screenshots:
         for title, screenshot in screenshots.items():
-            num_seats = get_num_seats(screenshot)
+            num_seats = get_num_seats(screenshot[0])
             table_id = re.findall(TABLE_ID_P, title)[0]
             blinds = parse_blinds(title)
             game_states[table_id] = CashGameState(num_seats=num_seats, table_id=table_id, sb=blinds[0], bb=blinds[1],
-                                                  title=title, screenshot=screenshots[title])
+                                                  title=title, screenshot=screenshot[0], bbox=screenshot[1])
 
     # Populate players for each game state
     for game_state in game_states.values():
@@ -247,9 +304,10 @@ def populate_players(game_state) -> None:
     """
     # Crop current screen to hero's seat number (bot_mid is preferred seat setup in Ignition Casino's settings)
     seat_crops = get_seat_crops(game_state.screenshot, game_state.num_seats)
+    game_state.clear_players()
     for seat_location, crop in seat_crops.items():
         player = get_player_details(crop, seat_location)
-        game_state.players[str(player.seat_num)] = player
+        game_state.add_player(player)
 
 
 def parse_blinds(title) -> tuple:
@@ -292,8 +350,8 @@ def resize_tables() -> None:
     """
     Resizes all active table windows to the same size specified in the config
     """
-    dimensions = '{' + str(int(config['DEFAULT']['table_width']) // 2) + ', '
-    dimensions += str(int(config['DEFAULT']['table_height']) // 2) + '}'
+    dimensions = '{' + str(int(config.get('DEFAULT', 'table_window_width')) // 2) + ', '
+    dimensions += str(int(config.get('DEFAULT', 'table_window_height')) // 2) + '}'
     applescript.tell.app("System Events", f'''tell application process "Ignition Casino Poker"
                                                 set allWindows to every window
                                                 repeat with aWindow in allWindows
@@ -326,11 +384,14 @@ def validate_table_windows(opened_windows) -> None:
     """
     for i in range(0, len(table_windows)):
         if not window_already_found(table_windows[i][2], opened_windows):
+            table_id = str(table_windows[i][2])
             log.debug('Table closed: {0} [{1}]'  # Title [ID]
-                      .format(table_windows[i][1], table_windows[i][2]))
-            game_states.pop(str(table_windows[i][2]))
+                      .format(table_windows[i][1], table_id))
+            if str(table_windows[i][2]) in game_states:
+                game_states.pop(table_id)
             table_windows.pop(i)
             validate_table_windows(opened_windows)
+            deallocate_gfx(table_id)
             break
 
 
@@ -342,13 +403,13 @@ def window_already_found(hwnd, windows=table_windows) -> bool:
     :return: Boolean indicating whether the window is found
     """
     # MacOS
-    if config['Environment']['OS'] == 'Darwin':
+    if config.get('Environment', 'OS') == 'Darwin':
         for window in windows:
             if window[2] == hwnd:
                 return True
 
     # Windows (to be implemented...)
-    elif config['Environment']['OS'] == 'Windows':
+    elif config.get('Environment', 'OS') == 'Windows':
         pass
 
     return False
@@ -391,7 +452,7 @@ def grab_screenshots(table_id=None) -> dict:
             continue
 
         # Update return dict
-        ret[f'{str(title)} {str(hwnd)}'] = screenshot
+        ret[f'{str(title)} {str(hwnd)}'] = (screenshot, bbox_raw)
 
     return None if len(ret) == 0 else ret
 
@@ -405,7 +466,8 @@ def update_screenshots(forever=False) -> None:
         for title, screenshot in screenshots.items():
             table_id = re.findall(TABLE_ID_P, title)[0]
             if table_id in game_states:
-                game_states[table_id].set_screenshot(screenshot)
+                game_states[table_id].set_screenshot(screenshot[0])
+                update_gfx(table_id)
 
     if forever:
         time.sleep(float(config.get('DEFAULT', 'screenshot_refresh_time_seconds')))
@@ -439,7 +501,7 @@ def refresh_table_windows(forever=False) -> None:
     global table_windows
 
     # MacOS
-    if config['Environment']['OS'] == 'Darwin':
+    if config.get('Environment', 'OS') == 'Darwin':
         # Retrieve all active windows
         opened_windows = Quartz.CGWindowListCopyWindowInfo(
             Quartz.kCGWindowListExcludeDesktopElements | Quartz.kCGWindowListOptionOnScreenOnly,
@@ -486,7 +548,7 @@ def refresh_table_windows(forever=False) -> None:
             refresh_table_windows()
 
     # Windows (to be implemented...)
-    elif config['Environment']['OS'] == 'Windows':
+    elif config.get('Environment', 'OS') == 'Windows':
         pass
 
     if forever:
@@ -498,6 +560,7 @@ def init() -> None:
     """
     Called on startup. Responsible for initialization of game_state objects
     """
+    init_gfx()
     begin_background_refresh('refresh_table_windows')
     begin_background_refresh('update_screenshots')
     begin_background_refresh('refresh_game_states')
@@ -505,4 +568,7 @@ def init() -> None:
 
 if __name__ == '__main__':
     game_states = {}
+    gfx = {}
     init()
+
+
