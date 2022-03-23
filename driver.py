@@ -1,13 +1,13 @@
 import numpy as np
 import threading
 import time
+import tkinter as tk
 
 from PIL import ImageGrab
 
 from config import *
 from classes.CashGameState import CashGameState
 from classes.Player import Player
-from classes.Graphics import Graphics
 
 # MacOS
 if config.get('Environment', 'OS') == 'Darwin':
@@ -21,60 +21,57 @@ elif config.get('Environment', 'OS') == 'Windows':
 table_windows = []  # j=0: window object, j=1: window title, j=2: hwnd
 
 
-def deallocate_gfx(table_id: str) -> None:
-    """
-    Hide graphics for table and allow for reallocation to new table window
-    :param table_id: HWND (window number) of the table
-    """
-    if table_id in gfx:
-        # Check for available gfx spots to deallocate to
-        for loc in range(int(config.get('DEFAULT', 'max_gfx_windows'))):
-            if loc not in gfx:
-                gfx[table_id].hide()
-                gfx[loc] = gfx.pop(table_id)
+def show_gfx():
+    gfx.deiconify()
 
 
-def allocate_gfx(table_id: str) -> bool:
-    """
-    Allocate the current table to an empty graphics window
-    :param table_id: HWND (window number) of the table
-    :return: Boolean indicating whether the graphics window was successfully allocated
-    """
-    for loc in range(int(config.get('DEFAULT', 'max_gfx_windows'))):
-        if loc in gfx:
-            gfx[table_id] = gfx.pop(loc)
-            # TODO: fix RuntimeError: "main thread is not in main loop" by using: https://stackoverflow.com/questions/47934144/update-data-in-a-tkinter-gui-with-data-from-a-second-thread
-            gfx[table_id].show()
-            return True
-    return False
+def hide_gfx():
+    gfx.withdraw()
 
 
-def update_gfx(table_id: str) -> bool:
-    """
-    Attempts to update a graphics window (allocates the table to a new window if needed)
-    :param table_id: HWND (window number) of the table
-    :return: Boolean indicating whether the graphics window was successfully updated
-    """
-    if table_id in gfx:
-        gfx[table_id].update(game_states[table_id])
-        return True
-    else:
-        if allocate_gfx(table_id):
-            gfx[table_id].update(game_states[table_id])
-            return True
-        else:
-            log.error(
-                'Unable to display graphics for the newly opened table... To allow more graphics windows, '
-                'modify the [DEFAULT] \'max_gfx_windows\' setting in config.ini')
-    return False
+def update_gfx():
+    # Hide gfx if no game_states are found
+    if len(game_states.values()) == 0:
+        hide_gfx()
+
+    # Display formatted gfx for each game_state
+    for game_state in game_states.values():
+        show_gfx()
+        gfx_width = 200
+        geometry_str = '{0}x{1}+{2}+{3}'.format(gfx_width, int(game_state.bbox['Height']),
+                                                int(game_state.bbox['X']) - gfx_width, int(game_state.bbox['Y']))
+        gfx.geometry(geometry_str)
+
+        # Update displayed data for game_state
+        board_contents.config(text=game_state.board)
+
+        # TODO: add gfx for multiple tables
+        break
+
+    gfx.after(int(1000 * float(config.get('DEFAULT', 'gfx_update_time_seconds'))), update_gfx)
 
 
 def init_gfx():
     """
     Initializes hidden gfx windows
     """
-    for loc in range(int(config.get('DEFAULT', 'max_gfx_windows'))):
-        gfx[loc] = Graphics(int(config.get('DEFAULT', 'table_window_width')) // 2)
+    global gfx, board_contents
+    width = int(config.get('DEFAULT', 'table_window_width')) // 2
+    gfx = tk.Tk()
+    gfx.wm_overrideredirect(True)
+    gfx.geometry(f"{width}x{100}+{20}+{700}")
+    gfx.configure(bg='black')
+
+    # Initialize labels
+    header = tk.Label(text='PokerEye', font=("Helvetica", 18), fg='yellow', bg='black')
+    header.place(x=58, y=5)
+
+    board_contents = tk.Label(font=("TkFixedFont", 42), fg='cyan', bg='black')
+    board_contents.place(x=15, y=40)
+
+    # Begin main gfx update loop
+    update_gfx()
+    gfx.mainloop()
 
 
 def update_board(game_state: object) -> None:
@@ -391,7 +388,6 @@ def validate_table_windows(opened_windows) -> None:
                 game_states.pop(table_id)
             table_windows.pop(i)
             validate_table_windows(opened_windows)
-            deallocate_gfx(table_id)
             break
 
 
@@ -467,7 +463,6 @@ def update_screenshots(forever=False) -> None:
             table_id = re.findall(TABLE_ID_P, title)[0]
             if table_id in game_states:
                 game_states[table_id].set_screenshot(screenshot[0])
-                update_gfx(table_id)
 
     if forever:
         time.sleep(float(config.get('DEFAULT', 'screenshot_refresh_time_seconds')))
@@ -560,15 +555,14 @@ def init() -> None:
     """
     Called on startup. Responsible for initialization of game_state objects
     """
-    init_gfx()
     begin_background_refresh('refresh_table_windows')
     begin_background_refresh('update_screenshots')
     begin_background_refresh('refresh_game_states')
+    init_gfx()
 
 
 if __name__ == '__main__':
     game_states = {}
-    gfx = {}
     init()
 
 
