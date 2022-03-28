@@ -27,24 +27,34 @@ table_windows = []  # j=0: window object, j=1: window title, j=2: hwnd
 # 2. EV (EV = (W% * $W) – (L% * $L))
 
 
-def convert_cards_to_abbr(cards_str) -> str:
+def convert_cards_to_abbr(cards_str, convert_ten=False) -> str:
     cards_using_abbr = cards_str
+    i_offset = 0
     for i in range(len(cards_str)):
         if cards_using_abbr[i] in SUIT_ABBR_MAP:
-            # TODO: fix TypeError: 'str' object does not support item assignment
-            cards_using_abbr[i] = SUIT_ABBR_MAP[cards_using_abbr[i]]
+            if convert_ten and cards_using_abbr[i] == 'T':
+                cards_using_abbr = list(cards_using_abbr)
+                cards_using_abbr[i] = '1'
+                cards_using_abbr.insert(i + 1, '0')
+                cards_using_abbr = ''.join(cards_using_abbr)
+                i_offset = 1
+            cards_using_abbr = list(cards_using_abbr)
+            cards_using_abbr[i + i_offset] = SUIT_ABBR_MAP[cards_using_abbr[i + i_offset]]
+            cards_using_abbr = ''.join(cards_using_abbr)
     return cards_using_abbr
 
 
 def calc_statistics(game_state):
+    game_hash = game_state.get_hash()
+
     # Base case to prevent overlapping calculations/repeating calculations
-    if game_state.calculations['is_calculating'] or game_state.get_hash() == game_state.calculations['last_calc_hash']:
+    if game_state.calculations['is_calculating'] or game_hash == game_state.calculations['last_calc_hash']:
         return
 
     # Initialize analyzer
     analyzer = pokertude.Analyzer()
     game_state.calculations['is_calculating'] = True
-    game_state.calculations['last_calc_hash'] = game_state.get_hash()
+    game_state.calculations['last_calc_hash'] = game_hash
 
     # Get players
     hero = None
@@ -52,37 +62,40 @@ def calc_statistics(game_state):
     for player in game_state.players.values():
         if player.is_hero:
             hero = player
-        elif player.is_active:  # TODO: get accurate number of current opponents from screenshot (update .is_active)
+        if player.is_active:  # TODO: get accurate number of current opponents from screenshot (update .is_active)
             num_active_opponents += 1
 
     # Pre-Flop
     if game_state.board.count('[]') == 5:
         if hero.hand.count('[]') == 2:
+            game_state.calculations['is_calculating'] = False
             return
-        h1, h2 = pokertude.parse_cards(convert_cards_to_abbr(hero.hand))
+        h1, h2 = pokertude.parse_cards(convert_cards_to_abbr(hero.hand, convert_ten=True))
         analyzer.set_hole_cards(h1, h2)
         analyzer.set_num_opponents(num_active_opponents)
         game_state.calculations['odds'] = analyzer.analyze()
     # Flop
     elif game_state.board.count('[]') == 2:
-        c1, c2, c3 = pokertude.parse_cards(convert_cards_to_abbr(' '.join(game_state.board.split()[:3])))
+        cards = convert_cards_to_abbr(' '.join(game_state.board.split()[:3]), convert_ten=True)
+        c1, c2, c3 = pokertude.parse_cards(cards)
         for c in [c1, c2, c3]:
             analyzer.community_card(c)
         analyzer.set_num_opponents(num_active_opponents)
         game_state.calculations['odds'] = analyzer.analyze()
     # Turn
     elif game_state.board.count('[]') == 1:
-        turn_card = pokertude.parse_card(convert_cards_to_abbr(game_state.board.split()[3]))
+        turn_card = pokertude.parse_card(convert_cards_to_abbr(game_state.board.split()[3], convert_ten=True))
         analyzer.community_card(turn_card)
         analyzer.set_num_opponents(num_active_opponents)
         game_state.calculations['odds'] = analyzer.analyze()
     # River
     elif game_state.board.count('[]') == 0:
-        river_card = pokertude.parse_card(convert_cards_to_abbr(game_state.board.split()[4]))
+        river_card = pokertude.parse_card(convert_cards_to_abbr(game_state.board.split()[4], convert_ten=True))
         analyzer.community_card(river_card)
         analyzer.set_num_opponents(num_active_opponents)
         game_state.calculations['odds'] = analyzer.analyze()
 
+    game_state.calculations['is_calculating'] = False
     log.debug(game_state.calculations)
 
 
@@ -104,8 +117,8 @@ def update_gfx():
         hide_gfx()
 
     # Display formatted gfx for each game_state
-    for table_id, game_state in game_states.items():
-        if not grab_screenshots(table_id):
+    for game_state in game_states.values():
+        if not grab_screenshots(game_state.table_id):
             hide_gfx()
             break
         show_gfx()
@@ -116,16 +129,17 @@ def update_gfx():
 
         # Update displayed data for game_state
         # Prevent incorrectly displaying an empty board after the flop
-        if game_states[table_id].pot == 0.0:
-            board_label.config(text=game_states[table_id].board)
-        elif game_states[table_id].board.count('[]') != 5:
-            board_label.config(text=game_states[table_id].board)
+        if game_state.pot == 0.0:
+            board_label.config(text=game_state.board)
+        elif game_state.board.count('[]') != 5:
+            board_label.config(text=game_state.board)
 
-        pot_label.config(text=format_currency(game_states[table_id].pot))
+        pot_label.config(text=format_currency(game_state.pot))
 
         # TODO: display other player information
-        for seat_num, player in game_states[table_id].players.items():
-            stack_str = f'{format_currency(player.stack)} (~{int(player.stack // game_states[table_id].bb)} BB)'
+        for seat_num, player in game_state.players.items():
+            bb_str = str(int(player.stack // game_state.bb)) if game_state.bb else "?"
+            stack_str = f'{format_currency(player.stack)} (~{bb_str} BB) '
             hero_stack_label.config(text=stack_str)
             hero_hand_label.config(text=player.hand)
             break

@@ -1,3 +1,6 @@
+import logging
+
+
 class CashGameState:
     def __init__(self, num_seats: int, table_id: str, sb: float, bb: float, title: str, screenshot: object, bbox: dict):
         self.num_seats: int = num_seats
@@ -31,10 +34,10 @@ class CashGameState:
         for player in self.players.values():
             if player.is_hero:
                 hero = player
-            elif player.is_active:  # TODO: get accurate number of current opponents from screenshot (update .is_active)
+            if player.is_active:  # TODO: get accurate number of current opponents from screenshot (update .is_active)
                 num_active_opponents += 1
 
-        return hero.hand + str(num_active_opponents) + self.board
+        return hero.hand + str(num_active_opponents) + self.board.strip()
 
     def add_player(self, player: dict):
         self.players[str(player.seat_num)] = player
