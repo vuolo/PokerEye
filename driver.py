@@ -9,6 +9,7 @@ from PIL import ImageGrab
 from config import *
 from classes.CashGameState import CashGameState
 from classes.Player import Player
+from libraries.pokertude import pokertude  # Modified to work silently with our software, returning useful dictionaries
 
 # MacOS
 if config.get('Environment', 'OS') == 'Darwin':
@@ -20,6 +21,73 @@ elif config.get('Environment', 'OS') == 'Windows':
     pass
 
 table_windows = []  # j=0: window object, j=1: window title, j=2: hwnd
+
+# TODO calculations:
+# 1. Wining percentages
+# 2. EV (EV = (W% * $W) – (L% * $L))
+
+
+def convert_cards_to_abbr(cards_str) -> str:
+    cards_using_abbr = cards_str
+    for i in range(len(cards_str)):
+        if cards_using_abbr[i] in SUIT_ABBR_MAP:
+            # TODO: fix TypeError: 'str' object does not support item assignment
+            cards_using_abbr[i] = SUIT_ABBR_MAP[cards_using_abbr[i]]
+    return cards_using_abbr
+
+
+def calc_statistics(game_state):
+    # Base case to prevent overlapping calculations/repeating calculations
+    if game_state.calculations['is_calculating'] or game_state.get_hash() == game_state.calculations['last_calc_hash']:
+        return
+
+    # Initialize analyzer
+    analyzer = pokertude.Analyzer()
+    game_state.calculations['is_calculating'] = True
+    game_state.calculations['last_calc_hash'] = game_state.get_hash()
+
+    # Get players
+    hero = None
+    num_active_opponents = 0  # TODO: get accurate number of current opponents from screenshot
+    for player in game_state.players.values():
+        if player.is_hero:
+            hero = player
+        elif player.is_active:  # TODO: get accurate number of current opponents from screenshot (update .is_active)
+            num_active_opponents += 1
+
+    # Pre-Flop
+    if game_state.board.count('[]') == 5:
+        if hero.hand.count('[]') == 2:
+            return
+        h1, h2 = pokertude.parse_cards(convert_cards_to_abbr(hero.hand))
+        analyzer.set_hole_cards(h1, h2)
+        analyzer.set_num_opponents(num_active_opponents)
+        game_state.calculations['odds'] = analyzer.analyze()
+    # Flop
+    elif game_state.board.count('[]') == 2:
+        c1, c2, c3 = pokertude.parse_cards(convert_cards_to_abbr(' '.join(game_state.board.split()[:3])))
+        for c in [c1, c2, c3]:
+            analyzer.community_card(c)
+        analyzer.set_num_opponents(num_active_opponents)
+        game_state.calculations['odds'] = analyzer.analyze()
+    # Turn
+    elif game_state.board.count('[]') == 1:
+        turn_card = pokertude.parse_card(convert_cards_to_abbr(game_state.board.split()[3]))
+        analyzer.community_card(turn_card)
+        analyzer.set_num_opponents(num_active_opponents)
+        game_state.calculations['odds'] = analyzer.analyze()
+    # River
+    elif game_state.board.count('[]') == 0:
+        river_card = pokertude.parse_card(convert_cards_to_abbr(game_state.board.split()[4]))
+        analyzer.community_card(river_card)
+        analyzer.set_num_opponents(num_active_opponents)
+        game_state.calculations['odds'] = analyzer.analyze()
+
+    log.debug(game_state.calculations)
+
+
+def format_currency(num, symbol='$') -> str:
+    return '$' + format(num, ',.2f')
 
 
 def show_gfx():
@@ -36,8 +104,8 @@ def update_gfx():
         hide_gfx()
 
     # Display formatted gfx for each game_state
-    for game_state in game_states.values():
-        if not grab_screenshots(game_state.table_id):
+    for table_id, game_state in game_states.items():
+        if not grab_screenshots(table_id):
             hide_gfx()
             break
         show_gfx()
@@ -48,16 +116,17 @@ def update_gfx():
 
         # Update displayed data for game_state
         # Prevent incorrectly displaying an empty board after the flop
-        if game_state.pot == 0.0:
-            board_label.config(text=game_state.board)
-        elif game_state.board.count('[]') != 5:
-            board_label.config(text=game_state.board)
+        if game_states[table_id].pot == 0.0:
+            board_label.config(text=game_states[table_id].board)
+        elif game_states[table_id].board.count('[]') != 5:
+            board_label.config(text=game_states[table_id].board)
 
-        pot_label.config(text=f'${game_state.pot}')
+        pot_label.config(text=format_currency(game_states[table_id].pot))
 
         # TODO: display other player information
-        for seat_num, player in game_state.players.items():
-            hero_stack_label.config(text=f'${player.stack} (~{int(player.stack // game_state.bb)} BB)')
+        for seat_num, player in game_states[table_id].players.items():
+            stack_str = f'{format_currency(player.stack)} (~{int(player.stack // game_states[table_id].bb)} BB)'
+            hero_stack_label.config(text=stack_str)
             hero_hand_label.config(text=player.hand)
             break
 
@@ -78,22 +147,21 @@ def init_gfx():
     gfx.geometry(f"{width}x{100}+{20}+{700}")
     gfx.configure(bg='black')
 
-    # Initialize labels
+    # Header label
     header_label = tk.Label(text='PokerEye', font=("Arial Black", 18), fg='yellow', bg='black')
     header_label.place(x=55, y=5)
 
+    # Board labels
     board_label = tk.Label(text='[] [] [] [] []', font=("Courier", 20), fg='cyan', bg='black')
     board_label.place(x=13, y=40)
-
     pot_label = tk.Label(font=("Arial", 16), fg='cyan', bg='black')
-    pot_label.place(x=75, y=71)
+    pot_label.place(x=70, y=71)
 
+    # Hero labels
     hero_header_label = tk.Label(text='Stats', font=("Arial Black", 18), fg='yellow', bg='black')
     hero_header_label.place(x=10, y=90)
-
     hero_stack_label = tk.Label(font=("Arial", 16), fg='yellow', bg='black')
     hero_stack_label.place(x=10, y=120)
-
     hero_hand_label = tk.Label(text='[] []', font=("Courier", 20), fg='yellow', bg='black')
     hero_hand_label.place(x=10, y=145)
 
@@ -160,7 +228,7 @@ def refresh_game_states(forever=False) -> None:
     for game_state in game_states.values():
         populate_players(game_state)
         update_board(game_state)
-        # calc_statistics(game_state)
+        calc_statistics(game_state)
 
     # Display all current game states if debugging
     if config.getboolean('Debug', 'enabled') and config.getboolean('Debug', 'display_game_states_to_terminal'):
@@ -215,15 +283,15 @@ def get_card_suit(card_crop) -> str:
     for row in card_crop:
         for pixel in row:
             if np.array_equal(pixel, SUIT_RGB_VALS['red']):
-                return SUIT_ABBR_COLOR_MAP['red']
+                return SUIT_COLOR_MAP['red']
             elif np.array_equal(pixel, SUIT_RGB_VALS['green']):
-                return SUIT_ABBR_COLOR_MAP['green']
+                return SUIT_COLOR_MAP['green']
             elif np.array_equal(pixel, SUIT_RGB_VALS['blue']):
-                return SUIT_ABBR_COLOR_MAP['blue']
+                return SUIT_COLOR_MAP['blue']
             elif np.array_equal(pixel, SUIT_RGB_VALS['black']):
-                return SUIT_ABBR_COLOR_MAP['black']
+                return SUIT_COLOR_MAP['black']
 
-    return SUIT_ABBR_COLOR_MAP['unknown']
+    return SUIT_COLOR_MAP['unknown']
 
 
 def parse_card(card_crop, size='small') -> str:

@@ -5,6 +5,7 @@ class Player:
         self.seat_num: int = seat_num
         self.is_hero: bool = is_hero
         self.is_vacant: bool = is_vacant
+        self.is_active: bool = not is_vacant
 
         self.hand: str = hand or '[] []'
         self.position: str = position  # TODO: continuously update position based on # of non-vacant players and button

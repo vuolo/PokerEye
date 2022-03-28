@@ -11,6 +11,30 @@ class CashGameState:
         self.players: dict = {}
         self.pot: float = 0.0
         self.is_visible: bool = False
+        self.calculations: dict = {
+            'is_calculating': False,
+            'last_calc_hash': '',
+            'odds': {
+                'win': 0.00,
+                'win%': '0.00%',
+                'win_expected': 0.00,
+                'win_expected%': '0.00%',
+                'tie': 0.00,
+                'tie%': '0.00%',
+                'ways_to_lose': {}
+            }
+        }
+
+    def get_hash(self) -> str:
+        hero = None
+        num_active_opponents = 0  # TODO: get accurate number of current opponents from screenshot
+        for player in self.players.values():
+            if player.is_hero:
+                hero = player
+            elif player.is_active:  # TODO: get accurate number of current opponents from screenshot (update .is_active)
+                num_active_opponents += 1
+
+        return hero.hand + str(num_active_opponents) + self.board
 
     def add_player(self, player: dict):
         self.players[str(player.seat_num)] = player

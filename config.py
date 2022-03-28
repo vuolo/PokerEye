@@ -48,12 +48,20 @@ FLOAT_P = re.compile(r'\d+(\.\d+)?$')
 POT_P = re.compile(r"[0-9]+")
 
 # Card suits (alternate variations: h♥♡, d♦♢, c♣♧, s♠♤)
-SUIT_ABBR_COLOR_MAP = {
+SUIT_COLOR_MAP = {
     'red': '♥',  # hearts
     'blue': '♦',  # diamonds
     'green': '♣',  # clubs
     'black': '♠',  # spades
     'unknown': 'u'  # unknown
+}
+
+SUIT_ABBR_MAP = {
+    '♥': 'h',  # hearts
+    '♦': 'd',  # diamonds
+    '♣': 'c',  # clubs
+    '♠': 's',  # spades
+    'u': 'u'  # unknown
 }
 
 SUIT_RGB_VALS = {
