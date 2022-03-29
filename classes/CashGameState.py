@@ -16,7 +16,7 @@ class CashGameState:
         self.is_visible: bool = False
         self.calculations: dict = {
             'is_calculating': False,
-            'last_calc_hash': '',
+            'last_calc_hash': '[] []1[] [] [] [] []',
             'odds': {
                 'win': 0.00,
                 'win%': '0.00%',
@@ -28,16 +28,71 @@ class CashGameState:
             }
         }
 
+    def set_title(self, title) -> None:
+        self.title = title
+
+    def get_title(self) -> str:
+        return self.title
+
+    def set_blinds(self, blinds) -> None:
+        self.sb = blinds['sb']
+        self.bb = blinds['bb']
+
+    def get_blinds(self) -> dict:
+        return {'sb': self.sb, 'bb': self.bb}
+
+    def set_bbox(self, bbox) -> None:
+        self.bbox = bbox
+
+    def get_bbox(self) -> dict:
+        return self.bbox
+
+    def get_table_id(self) -> str:
+        return self.table_id
+
+    def set_num_seats(self, num_seats) -> None:
+        self.num_seats = num_seats
+
+    def get_num_seats(self) -> int:
+        return self.num_seats
+
+    def set_screenshot(self, screenshot) -> None:
+        self.screenshot = screenshot
+
+    def get_screenshot(self) -> object:
+        return self.screenshot
+
+    def get_players(self) -> dict:
+        return self.players
+
+    def set_is_calculating(self, is_calculating) -> None:
+        self.calculations['is_calculating'] = is_calculating
+
+    def set_odds(self, odds) -> None:
+        self.calculations['odds'] = odds
+
+    def get_calculations(self) -> str:
+        return self.calculations
+
+    def set_board(self, board: str) -> None:
+        self.board: str = board
+
+    def get_board(self) -> str:
+        return self.board
+
+    def set_hash(self, new_hash) -> None:
+        self.calculations['last_calc_hash'] = new_hash
+
     def get_hash(self) -> str:
         hero = None
-        num_active_opponents = 0  # TODO: get accurate number of current opponents from screenshot
+        num_active_players = 0  # TODO: get accurate number of current opponents from screenshot
         for player in self.players.values():
             if player.is_hero:
                 hero = player
             if player.is_active:  # TODO: get accurate number of current opponents from screenshot (update .is_active)
-                num_active_opponents += 1
+                num_active_players += 1
 
-        return hero.hand + str(num_active_opponents) + self.board.strip()
+        return hero.hand + str(num_active_players) + self.board.strip()
 
     def add_player(self, player: dict):
         self.players[str(player.seat_num)] = player
@@ -45,11 +100,8 @@ class CashGameState:
     def clear_players(self):
         self.players: dict = {}
 
-    def set_board(self, board: str):
-        self.board: str = board
-
-    def set_screenshot(self, screenshot):
-        self.screenshot = screenshot
-
     def set_pot(self, pot: float):
         self.pot: float = pot
+
+    def get_pot(self) -> float:
+        return self.pot

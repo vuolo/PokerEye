@@ -22,81 +22,79 @@ elif config.get('Environment', 'OS') == 'Windows':
 
 table_windows = []  # j=0: window object, j=1: window title, j=2: hwnd
 
-# TODO calculations:
-# 1. Wining percentages
-# 2. EV (EV = (W% * $W) – (L% * $L))
+# TODO calculations?
+# 1. EV (EV = (W% * $W) – (L% * $L))
 
-
-def convert_cards_to_abbr(cards_str, convert_ten=False) -> str:
+def convert_cards_to_abbr(cards_str) -> str:
     cards_using_abbr = cards_str
-    i_offset = 0
     for i in range(len(cards_str)):
         if cards_using_abbr[i] in SUIT_ABBR_MAP:
-            if convert_ten and cards_using_abbr[i] == 'T':
-                cards_using_abbr = list(cards_using_abbr)
-                cards_using_abbr[i] = '1'
-                cards_using_abbr.insert(i + 1, '0')
-                cards_using_abbr = ''.join(cards_using_abbr)
-                i_offset = 1
             cards_using_abbr = list(cards_using_abbr)
-            cards_using_abbr[i + i_offset] = SUIT_ABBR_MAP[cards_using_abbr[i + i_offset]]
+            cards_using_abbr[i] = SUIT_ABBR_MAP[cards_using_abbr[i]]
             cards_using_abbr = ''.join(cards_using_abbr)
     return cards_using_abbr
 
 
-def calc_statistics(game_state):
-    game_hash = game_state.get_hash()
+def calc_statistics(table_id):
+    game_hash = game_states[table_id].get_hash()
 
     # Base case to prevent overlapping calculations/repeating calculations
-    if game_state.calculations['is_calculating'] or game_hash == game_state.calculations['last_calc_hash']:
+    if game_states[table_id].get_calculations()['is_calculating'] or game_hash == game_states[table_id].get_calculations()['last_calc_hash']:
         return
+    # if game_states[table_id].get_calculations()['is_calculating']:
+    #     return
 
     # Initialize analyzer
     analyzer = pokertude.Analyzer()
-    game_state.calculations['is_calculating'] = True
-    game_state.calculations['last_calc_hash'] = game_hash
+    game_states[table_id].set_hash(game_hash)
 
     # Get players
     hero = None
-    num_active_opponents = 0  # TODO: get accurate number of current opponents from screenshot
-    for player in game_state.players.values():
+    num_active_opponents = 1  # TODO: change to 0 once we get accurate number of current opponents
+    for player in game_states[table_id].get_players().values():
         if player.is_hero:
             hero = player
-        if player.is_active:  # TODO: get accurate number of current opponents from screenshot (update .is_active)
+        elif player.is_active:  # TODO: get accurate number of current opponents from screenshot (update .is_active)
             num_active_opponents += 1
 
-    # Pre-Flop
-    if game_state.board.count('[]') == 5:
-        if hero.hand.count('[]') == 2:
-            game_state.calculations['is_calculating'] = False
-            return
-        h1, h2 = pokertude.parse_cards(convert_cards_to_abbr(hero.hand, convert_ten=True))
-        analyzer.set_hole_cards(h1, h2)
-        analyzer.set_num_opponents(num_active_opponents)
-        game_state.calculations['odds'] = analyzer.analyze()
+    # Base case to prevent calculations on empty hands
+    if hero.hand.count('[]') == 2:
+        return
+
+    # Hand
+    h1, h2 = pokertude.parse_cards(convert_cards_to_abbr(hero.hand))
+    analyzer.set_hole_cards(h1, h2)
+
     # Flop
-    elif game_state.board.count('[]') == 2:
-        cards = convert_cards_to_abbr(' '.join(game_state.board.split()[:3]), convert_ten=True)
+    if game_states[table_id].get_board().count('[]') == 2:
+        # Board (first 3 cards)
+        cards = convert_cards_to_abbr(' '.join(game_states[table_id].get_board().split()[:3]))
         c1, c2, c3 = pokertude.parse_cards(cards)
         for c in [c1, c2, c3]:
             analyzer.community_card(c)
-        analyzer.set_num_opponents(num_active_opponents)
-        game_state.calculations['odds'] = analyzer.analyze()
     # Turn
-    elif game_state.board.count('[]') == 1:
-        turn_card = pokertude.parse_card(convert_cards_to_abbr(game_state.board.split()[3], convert_ten=True))
-        analyzer.community_card(turn_card)
-        analyzer.set_num_opponents(num_active_opponents)
-        game_state.calculations['odds'] = analyzer.analyze()
+    elif game_states[table_id].get_board().count('[]') == 1:
+        # Board (excluding river)
+        cards = convert_cards_to_abbr(' '.join(game_states[table_id].get_board().split()[:4]))
+        c1, c2, c3, c4 = pokertude.parse_cards(cards)
+        for c in [c1, c2, c3, c4]:
+            analyzer.community_card(c)
     # River
-    elif game_state.board.count('[]') == 0:
-        river_card = pokertude.parse_card(convert_cards_to_abbr(game_state.board.split()[4], convert_ten=True))
-        analyzer.community_card(river_card)
-        analyzer.set_num_opponents(num_active_opponents)
-        game_state.calculations['odds'] = analyzer.analyze()
+    elif game_states[table_id].get_board().count('[]') == 0:
+        # Board
+        cards = convert_cards_to_abbr(' '.join(game_states[table_id].get_board().split()))
+        c1, c2, c3, c4, c5 = pokertude.parse_cards(cards)
+        for c in [c1, c2, c3, c4, c5]:
+            analyzer.community_card(c)
 
-    game_state.calculations['is_calculating'] = False
-    log.debug(game_state.calculations)
+    # Calculate odds
+    analyzer.set_num_opponents(num_active_opponents)
+    game_states[table_id].set_is_calculating(True)
+    game_states[table_id].set_odds(analyzer.analyze())
+
+    # Finalize calculations
+    game_states[table_id].set_is_calculating(False)
+    # log.debug(game_states[table_id].get_calculations())
 
 
 def format_currency(num, symbol='$') -> str:
@@ -118,31 +116,45 @@ def update_gfx():
 
     # Display formatted gfx for each game_state
     for game_state in game_states.values():
-        if not grab_screenshots(game_state.table_id):
+        if not grab_screenshots(game_state.get_table_id()):
             hide_gfx()
             break
         show_gfx()
         gfx_width = 200
-        geometry_str = '{0}x{1}+{2}+{3}'.format(gfx_width, int(game_state.bbox['Height']),
-                                                int(game_state.bbox['X']) - gfx_width, int(game_state.bbox['Y']))
+        geometry_str = '{0}x{1}+{2}+{3}'.format(gfx_width, int(game_state.get_bbox()['Height']),
+                                                int(game_state.get_bbox()['X']) - gfx_width,
+                                                int(game_state.get_bbox()['Y']))
         gfx.geometry(geometry_str)
 
         # Update displayed data for game_state
         # Prevent incorrectly displaying an empty board after the flop
-        if game_state.pot == 0.0:
-            board_label.config(text=game_state.board)
-        elif game_state.board.count('[]') != 5:
-            board_label.config(text=game_state.board)
+        if game_state.get_pot() == 0.0:
+            board_label.config(text=game_state.get_board())
+        elif game_state.get_board().count('[]') != 5:
+            board_label.config(text=game_state.get_board())
 
-        pot_label.config(text=format_currency(game_state.pot))
+        pot_label.config(text=format_currency(game_state.get_pot()))
 
         # TODO: display other player information
-        for seat_num, player in game_state.players.items():
-            bb_str = str(int(player.stack // game_state.bb)) if game_state.bb else "?"
+        for seat_num, player in game_state.get_players().items():
+            bb_str = str(int(player.stack // game_state.get_blinds()['bb'])) if game_state.get_blinds()['bb'] else "?"
             stack_str = f'{format_currency(player.stack)} (~{bb_str} BB) '
             hero_stack_label.config(text=stack_str)
             hero_hand_label.config(text=player.hand)
             break
+
+        if game_state.get_calculations()['is_calculating']:
+            odds_header_label.config(text='Odds (calculating)')
+        else:
+            odds_header_label.config(text='Odds')
+            odds_win_label.config(text='Win: {0} ({1})'.format(game_state.get_calculations()['odds']['win%'],
+                                                               game_state.get_calculations()['odds']['win_expected%']))
+            odds_tie_label.config(text='Tie: ' + game_state.get_calculations()['odds']['tie%'])
+            ways_to_lose_str = ''
+            for key, value in game_state.get_calculations()['odds']['ways_to_lose'].items():
+                if '%' in key:
+                    ways_to_lose_str += f'{key.replace("%","")}: {value}\n'
+            odds_ways_to_lose_label.config(text=ways_to_lose_str)
 
         # TODO: add gfx support for more than 1 table
         break
@@ -154,7 +166,8 @@ def init_gfx():
     """
     Initializes hidden gfx windows
     """
-    global gfx, board_label, pot_label, hero_stack_label, hero_hand_label
+    global gfx, board_label, pot_label, hero_stack_label, hero_hand_label, odds_header_label, odds_win_label, \
+        odds_tie_label, odds_ways_to_lose_label
     width = int(config.get('DEFAULT', 'table_window_width')) // 2
     gfx = tk.Tk()
     gfx.wm_overrideredirect(True)
@@ -174,22 +187,34 @@ def init_gfx():
     # Hero labels
     hero_header_label = tk.Label(text='Stats', font=("Arial Black", 18), fg='yellow', bg='black')
     hero_header_label.place(x=10, y=90)
-    hero_stack_label = tk.Label(font=("Arial", 16), fg='yellow', bg='black')
+    hero_stack_label = tk.Label(font=("Arial", 16), fg='cyan', bg='black')
     hero_stack_label.place(x=10, y=120)
-    hero_hand_label = tk.Label(text='[] []', font=("Courier", 20), fg='yellow', bg='black')
+    hero_hand_label = tk.Label(text='[] []', font=("Courier", 20), fg='cyan', bg='black')
     hero_hand_label.place(x=10, y=145)
+
+    # Odds labels
+    odds_header_label = tk.Label(text='Odds', font=("Arial Black", 18), fg='yellow', bg='black')
+    odds_header_label.place(x=10, y=175)
+    odds_win_label = tk.Label(font=("Arial", 16), fg='cyan', bg='black')
+    odds_win_label.place(x=10, y=205)
+    odds_tie_label = tk.Label(font=("Arial", 16), fg='cyan', bg='black')
+    odds_tie_label.place(x=10, y=230)
+    odds_ways_to_lose_header_label = tk.Label(text='Ways to Lose', font=("Arial Black", 18), fg='yellow', bg='black')
+    odds_ways_to_lose_header_label.place(x=10, y=255)
+    odds_ways_to_lose_label = tk.Label(font=("Arial", 16), fg='cyan', bg='black', justify='left')
+    odds_ways_to_lose_label.place(x=10, y=285)
 
     # Begin main gfx update loop
     update_gfx()
     gfx.mainloop()
 
 
-def update_board(game_state: object) -> None:
+def update_board(table_id) -> None:
     """
     Reads the board from the screenshot and stores it in the game_state
-    :param game_state: CashGameState object
+    :param table_id: HWND of table window
     """
-    table = get_static_crop(game_state.screenshot, 'table')
+    table = get_static_crop(game_states[table_id].get_screenshot(), 'table')
     board_crops = {'full': table[365:365 + 165, 500:500 + (110 * 5) + (22 * 4)]}
     board_crops['card_1'] = board_crops['full'][0:-1, 0:110]
     board_crops['card_2'] = board_crops['full'][0:-1, 110 + 22:(110 * 2) + 22]
@@ -204,7 +229,7 @@ def update_board(game_state: object) -> None:
     # Fix incorrect decimal points in place of commas
     if pot_str.count('.') > 1:
         pot_str = pot_str.replace('.', '', pot_str.count('.') - 1)
-    game_state.set_pot(float(pot_str) if pot_str else 0.0)
+    game_states[table_id].set_pot(float(pot_str) if pot_str else 0.0)
 
     cards = []  # 5 max cards on the board
     for card_num in range(1, 6):
@@ -220,7 +245,7 @@ def update_board(game_state: object) -> None:
             board += cards[card_num - 1] + ' '
 
     board.strip()
-    game_state.set_board(board)
+    game_states[table_id].set_board(board)
 
 
 def refresh_game_states(forever=False) -> None:
@@ -235,14 +260,22 @@ def refresh_game_states(forever=False) -> None:
             num_seats = get_num_seats(screenshot[0])
             table_id = re.findall(TABLE_ID_P, title)[0]
             blinds = parse_blinds(title)
-            game_states[table_id] = CashGameState(num_seats=num_seats, table_id=table_id, sb=blinds[0], bb=blinds[1],
-                                                  title=title, screenshot=screenshot[0], bbox=screenshot[1])
+            if table_id in game_states:
+                game_states[table_id].set_title(title)
+                game_states[table_id].set_num_seats(num_seats)
+                game_states[table_id].set_blinds({'sb': blinds[0], 'bb': blinds[1]})
+                game_states[table_id].set_screenshot(screenshot[0])
+                game_states[table_id].set_bbox(screenshot[1])
+            else:
+                game_states[table_id] = CashGameState(num_seats=num_seats, table_id=table_id, sb=blinds[0],
+                                                      bb=blinds[1], title=title, screenshot=screenshot[0],
+                                                      bbox=screenshot[1])
 
-    # Populate players for each game state
-    for game_state in game_states.values():
-        populate_players(game_state)
-        update_board(game_state)
-        calc_statistics(game_state)
+    # Update each game state
+    for table_id, game_state in game_states.items():
+        populate_players(table_id)
+        update_board(table_id)
+        calc_statistics(table_id)
 
     # Display all current game states if debugging
     if config.getboolean('Debug', 'enabled') and config.getboolean('Debug', 'display_game_states_to_terminal'):
@@ -259,18 +292,18 @@ def display_game_states() -> None:
     Displays all current game states to console
     """
     for table_id, game_state in game_states.items():
-        log.debug(f'### Table {game_state.table_id}: {game_state.title.replace(game_state.table_id, "")}')
+        log.debug(f'### Table {game_state.get_table_id()}: {game_state.get_title().replace(game_state.get_table_id(), "")}')
         if not grab_screenshots(game_state.table_id):
             log.debug(' | ')
             log.debug(' | Unable to view the table window... Ensure the full table window visible.')
             log.debug(' | \n')
             continue
         log.debug(' | ')
-        log.debug(' | Board ' + f'(${game_state.pot}):')
-        log.debug(' | ' + game_state.board)
+        log.debug(' | Board ' + f'(${game_state.get_pot()}):')
+        log.debug(' | ' + game_state.get_board())
         log.debug(' | ')
         log.debug(' | Players:')
-        for seat_num, player in game_state.players.items():
+        for seat_num, player in game_state.get_players().items():
             log.debug(f' | Player {seat_num}: {player.__dict__}')
         log.debug(' | \n')
 
@@ -421,18 +454,18 @@ def get_seat_crops(screenshot, num_seats) -> dict:
         }
 
 
-def populate_players(game_state) -> None:
+def populate_players(table_id) -> None:
     """
     Creates Player objects for each player found. For each player, sets seat_num, is_hero, and stack.
     These players are added to game_state's players dictionary.
-    :param game_state: CashGameState object
+    :param table_id: HWND of table window
     """
     # Crop current screen to hero's seat number (bot_mid is preferred seat setup in Ignition Casino's settings)
-    seat_crops = get_seat_crops(game_state.screenshot, game_state.num_seats)
-    game_state.clear_players()
+    seat_crops = get_seat_crops(game_states[table_id].get_screenshot(), game_states[table_id].get_num_seats())
+    game_states[table_id].clear_players()
     for seat_location, crop in seat_crops.items():
         player = get_player_details(crop, seat_location)
-        game_state.add_player(player)
+        game_states[table_id].add_player(player)
 
 
 def parse_blinds(title) -> tuple:

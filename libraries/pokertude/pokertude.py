@@ -33,7 +33,7 @@ def face_to_value(face):
     if face in FACE_TO_VALUE:
         return FACE_TO_VALUE[face]
     else:
-        return int(face)
+        return int(face.replace('T', '10'))
 
 
 def value_to_face(value):
